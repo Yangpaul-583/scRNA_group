@@ -268,14 +268,59 @@ counties %>%
 
 
 
+counties_selected %>%
+  # Add population_walk containing the total number of people who walk to work 
+  mutate(population_walk  = population * walk /100)%>%
+  # Count weighted by the new column, sort in descending order
+  count(state, wt= population_walk, sort=TRUE)
+
+counties_selected %>%
+  group_by(state) %>%
+  summarize(total_area = sum(land_area),
+            total_population = sum(population)) %>%
+  # Add a density column
+  mutate(density = total_population / total_area)%>%
+  # Sort by density in descending order
+  arrange(desc(density))
 
 
 
+counties_selected %>%
+  # Group and summarize to find the total population
+  group_by(region, state) %>%
+  summarize(total_pop = sum(population)) %>%
+  # Calculate the average_pop and median_pop columns 
+  summarize(average_pop = mean(total_pop),
+            median_pop = median(total_pop))
 
+counties_selected %>%
+  # Group by region
+  group_by(region)%>%
+  # Find the county with the highest percentage of people who walk to work
+  slice_max(walk, n = 1)
 
-
-
-
+# # A tibble: 4 × 6
+# # Groups:   region [4]
+# region        state        county                 metro    population  walk
+# <chr>         <chr>        <chr>                  <chr>         <dbl> <dbl>
+#   1 North Central North Dakota McIntosh               Nonmetro       2759  17.5
+# 2 Northeast     New York     New York               Metro       1629507  20.7
+# 3 South         Virginia     Lexington city         Nonmetro       7071  31.7
+# 4 West          Alaska       Aleutians East Borough Nonmetro       3304  71.2
+counties_selected %>%
+  group_by(region, state) %>%
+  # Calculate average income
+  summarize(average_income = mean(income))%>%
+  # Find the lowest income state in each region
+  slice_min(average_income, n = 1)
+# # A tibble: 4 × 3
+# # Groups:   region [4]
+# region        state       average_income
+# <chr>         <chr>                <dbl>
+#   1 North Central Missouri            41755.
+# 2 Northeast     Maine               46142.
+# 3 South         Mississippi         34939.
+# 4 West          New Mexico          40184.
 
 
 
