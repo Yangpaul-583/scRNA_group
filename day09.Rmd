@@ -1,0 +1,396 @@
+# 1.背景知识
+做拟时序分析是为了探索自己感兴趣的几种细胞之间的发育关系，一般不是用全部类型的细胞来做的。
+
+如果让ai来说拟时序的目的那就比我说的多:
+
+拟时序分析（Pseudo-time analysis）是一种用于理解细胞状态和细胞命运变化的计算生物学方法。这种分析通常用于单细胞测序数据，其目的是重建细胞发育或疾病进程中的时间序列，即使实际的时间信息不可用。以下是进行拟时序分析的几个主要目的：
+
+细胞状态推断：通过分析单个细胞的基因表达模式，推断细胞在生物学过程中所处的状态。
+
+细胞轨迹追踪：重建细胞从一种状态转变到另一种状态的路径，这有助于理解细胞分化、发育或疾病进展的过程。
+
+细胞命运预测：预测细胞随时间可能采取的发育轨迹，尤其是在干细胞分化或癌症发展的研究中。
+
+动态过程建模：创建细胞状态变化的动态模型，这有助于揭示细胞行为的内在规律和调控机制。
+
+细胞亚群识别：在复杂的细胞群体中识别不同的细胞亚群，并理解它们在生物学过程中的作用。
+
+基因调控网络推断：通过分析基因表达随“拟时间”的变化，推断基因调控网络和信号传导途径。
+
+疾病机理探索：在疾病研究中，拟时序分析有助于揭示疾病发生和发展的分子机制。
+
+药物作用机制研究：通过观察药物处理前后细胞状态的变化，研究药物的作用机制和效果。
+
+拟时序分析是一种强大的工具，它可以帮助研究者在没有直接时间标记的情况下，通过基因表达数据来探索细胞状态的变化和动态过程。这种方法在单细胞生物学、发育生物学、癌症生物学和神经科学等领域有着广泛的应用。
+
+本篇代码是处理多样本数据的，单样本的在前面。
+
+```{r}
+rm(list = ls())
+library(Seurat)
+library(monocle)
+library(dplyr)
+load("../day07/scRNA.Rdata")
+table(Idents(scRNA))
+```
+```{r}
+table(scRNA$orig.ident)
+```
+```{r}
+head(scRNA@meta.data)
+```
+```{r}
+DimPlot(scRNA,label = T)+NoLegend()
+```
+本文的输入数据是seurat做完降维聚类分群注释的数据。celltype是细胞类型注释，用以下代码添加：
+```{r}
+scRNA$celltype = Idents(scRNA)
+```
+做拟时序分析通常不是拿全部的细胞，而是拿感兴趣的一部分。用subset提取子集即可。因为要使用差异基因来排序，所以要两类及以上细胞。基于背景知识选择有进化关系的细胞类型。
+
+我这里只是举例，没有考虑背景知识，提取两种细胞：
+```{r}
+levels(Idents(scRNA)) #打出来细胞类型供复制
+
+## [1] "CD4+ T-cells"      "Fibroblasts"       "B-cells"          
+## [4] "CD8+ T-cells"      "Neutrophils"       "Monocytes"        
+## [7] "Adipocytes"        "NK cells"          "Endothelial cells"
+
+scRNA = subset(scRNA,idents = c("CD8+ T-cells","NK cells"))
+```
+为了节省计算资源我们还是抽样，实战时不能抽样哦。你跑完我的示例代码换个别的细胞类型跑跑看。
+```{r}
+table(Idents(scRNA))
+
+## 
+## CD8+ T-cells     NK cells 
+##          544           92
+
+set.seed(1234)
+scRNA = subset(scRNA,downsample = 100)
+```
+如果只想做一类细胞的拟时序，有两个选择：二次分群再做（和提取两种细胞是一样的道理），或者是选择其他基因用于排序（在后面有）。
+
+因为monocle和seurat是两个不同的体系，所以需要将seurat对象转换为monocle可以接受的CellDataSet对象。虽然monocle3已经出来很久了，但大家都不约而同的选择monocle2，大概就是习惯了吧。。。
+
+# 2.创建CellDataSet对象
+理论上，importCDS函数可以直接把seurat对象转换为CellDataSet对象，但是seurat更新了，monocle没有，所以这个函数目前不适配新版的seurat对象。
+
+以下代码无需改动👇
+```{r}
+# count矩阵，官方建议用count
+ct <- scRNA@assays$RNA$counts
+# 基因注释
+gene_ann <- data.frame(
+  gene_short_name = row.names(ct), 
+  row.names = row.names(ct)
+)
+fd <- new("AnnotatedDataFrame",
+          data=gene_ann)
+# 临床信息
+pd <- new("AnnotatedDataFrame",
+          data=scRNA@meta.data)
+#新建CellDataSet对象
+sc_cds <- newCellDataSet(
+  ct, 
+  phenoData = pd,
+  featureData =fd,
+  expressionFamily = negbinomial.size(),
+  lowerDetectionLimit=1)
+sc_cds
+```
+
+# 3.构建细胞发育轨迹
+选择基因有不同的策略:
+
+1.使用seurat给出的高变化基因
+
+2.按照平均表达量大于某个数字(比如0.1，官网用的是这个)的基因。
+
+3.使用不同细胞类型之间的差异基因，differentialGeneTest计算。
+
+根据以往经验，选择使用最后一个策略效果可能会更好。
+
+差异分析是一个非常漫长的过程，几十个细胞都要算上一分钟，所以拟时序非常耗费计算资源。 cores = 4是使用4个核来计算。你的电脑有多少核可以搜一搜怎么查看，例如win10就是：https://jingyan.baidu.com/article/fec4bce2730b11f2618d8b0c.html
+
+一定要设置的比总数小，不要有几个核用几个，你电脑还得干其他的呢😄。
+
+以下代码无需改动👇
+```{r}
+sc_cds <- estimateSizeFactors(sc_cds)
+sc_cds <- estimateDispersions(sc_cds)
+fdif = "diff_test_res2.Rdata"
+if(!file.exists(fdif)){
+  diff_test_res <- differentialGeneTest(sc_cds,
+                                        fullModelFormulaStr = " ~ celltype + orig.ident",
+                                        reducedModelFormulaStr = " ~ orig.ident", 
+                                        cores = 4)
+  save(diff_test_res,file = fdif)
+}
+load(fdif)
+ordering_genes <- row.names(subset(diff_test_res, qval < 0.01))
+#查看基因，筛选适合用于排序的，设置为排序要使用的基因
+head(ordering_genes)
+
+## [1] "KIAA2013" "EFHD2"    "RCAN3"    "PLK3"     "JUN"      "PDE4B"
+
+length(ordering_genes)
+
+## [1] 122
+
+sc_cds <- setOrderingFilter(sc_cds, ordering_genes)
+#画出选择的基因
+plot_ordering_genes(sc_cds)
+```
+plot_ordering_genes画的图纵坐标是基因表达量的变异性（离散性）,横坐标是每个基因在所有细胞种的平均表达量。
+
+红线表示Monocle2基于横纵坐标的关系拟合的变异期望值，为用于排序的基因是黑色，其他基因是灰色。
+
+```{r}
+#降维
+sc_cds <- reduceDimension(sc_cds,residualModelFormulaStr = "~orig.ident")
+#细胞排序
+sc_cds <- orderCells(sc_cds)
+```
+对比一下单样本和多样本的数据，differentialGeneTest和reduceDimension不一样，要考虑样本。因为我们是从count开始构建CellDataSet对象的，在seurat里面做的批次整合已经无效了，在monocle里面需要重新去除批次效应。
+
+# 4.绘图展示
+## 4.1 发育轨迹图
+```{r}
+library(ggsci)
+p1 = plot_cell_trajectory(sc_cds)+ scale_color_nejm()
+p2 = plot_cell_trajectory(sc_cds, color_by = 'Pseudotime') 
+p3 = plot_cell_trajectory(sc_cds, color_by = 'celltype')  + scale_color_npg()
+library(patchwork)
+p2+p1/p3
+```
+这三种着色方式放在一起非常的带劲，很清晰的展示了pseudotime、state和celltype是怎样变化的。
+
+Pseudotime数值从小到大就是顺序就是推断的发育顺序。图上的点颜色越深，时间越早，颜色越浅，时间越晚。
+
+state是发育的不同阶段，数值越小越靠前。
+
+celltype则可以看到具体的细胞类型在时间轨迹图上的分布。
+
+每条线的尽头有些没有画在轨迹上的属于正常。还有，如果你选择的细胞类型太多太杂，或者是多样本数据没有去除批次效应就会分叉太多，像个蜈蚣😄。
+
+以orig.ident着色可以看出，不同样本中的细胞基本是均匀分布在轨迹上的，说明前面的代码很好的去除了样本间的批次效应。
+```{r}
+plot_cell_trajectory(sc_cds, color_by = 'orig.ident')
+```
+
+## 4.2 经典的拟时序热图
+展示了一些基因是如何随着时间轨迹的变化而渐变的，这个渐变不同于findmarkers，是体现变化过程的，而不是直接给出差异表达的基因。
+
+理论上应该是一句代码一行，如果两句代码想放在同一行上就要用;隔开。可以减少点Run或者按快捷键的次数。
+
+选择了q值最小的50个基因来画热图。数量可以按需调整，其他代码不用改。
+```{r}
+gene_to_cluster = diff_test_res %>% arrange(qval) %>% head(50) %>% pull(gene_short_name);head(gene_to_cluster)
+
+## [1] "GNLY"   "GZMB"   "KLRD1"  "FGFBP2" "TYROBP" "NKG7"
+
+plot_pseudotime_heatmap(sc_cds[gene_to_cluster,],
+                        num_clusters = nlevels(Idents(scRNA)), 
+                        show_rownames = TRUE,
+                        cores = 4,return_heatmap = TRUE,
+                        hmcols = colorRampPalette(c("navy", "white", "firebrick3"))(100))
+```
+num_clusters = nlevels(Idents(scRNA))是把基因聚成几簇，推荐是有几类细胞就设置几，用nlevels实现了自动化（我原创滴）。
+
+colorRampPalette(c("navy", "white", "firebrick3"))(100)是把3种颜色切割成渐变的100种颜色，热图设置颜色都是这样设置。
+## 4.3 基因轨迹图
+用感兴趣的基因给轨迹图着色，gs可以换成你想换的基因。
+```{r}
+gs = head(gene_to_cluster)
+plot_cell_trajectory(sc_cds,markers=gs,
+                     use_color_gradient=T)
+```
+## 4.4 基因拟时序点图
+横坐标是按照pseudotime排好顺序的。
+```{r}
+plot_genes_in_pseudotime(sc_cds[gs,],
+                  color_by = "celltype",
+                  nrow= 3, #6个基因所以排了3行，数量有变化时要改
+                  ncol = NULL )
+```
+
+
+今日任务1：跑通本文代码，对比一下单样本和多样本的代码区别在哪。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+单细胞数据的二次分群分析
+# 1.背景知识
+Seurat里的FindClusters函数设置的resolution数值越大，分群的数量就越多，但是当单细胞数量太多的时候，会遇到resolution再变大，分群的数量也不再增加的情况。一次分群分不开，但又想要细分时，就会需要二次分群。
+
+# 2.加载数据
+sce.Rdata是day6降维聚类分群+手动注释的结果
+```{r}
+rm(list = ls())
+library(Seurat)
+library(dplyr)
+load("../day06/sce.Rdata")
+seu.obj = sce
+head(seu.obj@meta.data)
+p1 = DimPlot(seu.obj, reduction = "umap",label=T)+NoLegend()
+p1
+```
+
+# 3.二次分群
+这里以成纤维细胞为例进行二次分群。想要切换别的细胞类型直接修改下面的my_sub即可。
+
+核心就是提取感兴趣的亚群的细胞组成的Seurat对象，后面就是标准流程和可视化了，没有任何区别。
+```{r}
+my_sub = "Fibroblasts"
+sub.cells <- subset(seu.obj, idents = my_sub)
+f = "obj.Rdata"
+if(!file.exists(f)){
+  sub.cells = sub.cells %>%
+  NormalizeData() %>%
+  FindVariableFeatures() %>%
+  ScaleData(features = rownames(.)) %>%
+  RunPCA(features = VariableFeatures(.))  %>%
+  FindNeighbors(dims = 1:15) %>%
+  FindClusters(resolution = 0.5) %>%
+  RunUMAP(dims = 1:15) 
+  save(sub.cells,file = f)
+}
+
+## Modularity Optimizer version 1.3.0 by Ludo Waltman and Nees Jan van Eck
+## 
+## Number of nodes: 90
+## Number of edges: 2949
+## 
+## Running Louvain algorithm...
+## Maximum modularity in 10 random starts: 0.5587
+## Number of communities: 2
+## Elapsed time: 0 seconds
+
+load(f)
+DimPlot(sub.cells, reduction = 'umap',label = T)+NoLegend()
+```
+```{r}
+sub.cells@meta.data$celltype = paste0("M",sub.cells$seurat_clusters) #把子对象的亚群注释结果添加到表格上面去。
+save(sub.cells,file = "sub.cells1.Rdata")
+```
+#3.marker基因及其可视化
+找亚群间的差异基因
+```{r}
+sub.cells.markers <- FindAllMarkers(sub.cells, only.pos = TRUE,  
+                            min.pct = 0.25, logfc.threshold = 0.25)
+
+top10 <- sub.cells.markers %>% 
+  group_by(cluster) %>% 
+  top_n(n = 10, wt = avg_log2FC) %>% 
+  pull(gene);top10
+```
+### marker基因的5种可视化
+```{r}
+VlnPlot(sub.cells, features = top10)
+```
+```{r}
+RidgePlot(sub.cells, features = top10)
+```
+```{r}
+FeaturePlot(sub.cells, features = top10)
+```
+```{r}
+DotPlot(sub.cells,features = top10)+ RotatedAxis()
+```
+```{r}
+DoHeatmap(sub.cells, features = top10) + NoLegend()
+```
+# 4.放回原来的Seurat对象里面
+上面的umap图是感兴趣的单独的展示，也可以把它放回原来的seurat对象里。
+
+## 4.1 R语言基础知识补充☞match
+match函数时匹配，用于找出一个向量中的元素在另一个向量中的对应位置，非常实用的R语言神技能。
+```{r}
+x <- c("f","b")
+y <- c("b","c","f")
+# 使用match函数找到x在y中的位置
+match(x, y)
+
+## [1] 3 1
+```
+找出x的元素在y中的对应位置。3 1 就表示x里的两个元素f和b分别在y的第3和第1个位置
+```{r}
+seu.obj$celltype = as.character(Idents(seu.obj))
+seu.obj$celltype = ifelse(seu.obj$celltype==my_sub,
+       sub.cells$celltype[match(colnames(seu.obj),colnames(sub.cells))],
+       seu.obj$celltype)
+```
+这句是高难度操作👆是我原创滴。使用ifelse函数实现了分情况讨论：判断seu.obj的每个细胞是否是my_sub(本例是Fibroblasts),如果是的话，就替换成sub.cells里面匹配的每个细胞对应的celltype，也就是M0和M1；否则就不替换，还是原来的celltype。
+
+真羡慕你一步到位从我这里学到了这么厉害的技能👆！上别处找的实现这个目的的代码可能要写三五句呢，我的最简洁😄。
+```{r}
+Idents(seu.obj) = seu.obj$celltype
+p2 = DimPlot(seu.obj,label = T)+NoLegend()
+p1+p2
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

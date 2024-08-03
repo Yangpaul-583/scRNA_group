@@ -1,0 +1,292 @@
+# 加载数据
+```{r}
+rm(list = ls())
+getwd()
+```
+我的单样本降维聚类分群的结果放在day5文件夹里了，今天在day5的旁边新建了一个day6文件夹，所以加载代码里的路径是”../day5/obj.Rdata”,..代表工作目录的上一级。也就是加载了隔壁day5文件夹里的obj.Rdata。如果你没有换工作目录，接着昨天的走，就直接load(“obj.Rdata”)即可。注意换了数据分析项目一定要换工作目录，文件夹又不是紧缺资源，没必要都挤在一起，今天的没事，明天以及后面的都需要每一天的内容换一个工作目录，用project管理很方便。
+```{r}
+rm(list = ls())
+library(Seurat)
+load("../day5/obj.Rdata")
+p1 = DimPlot(seu.obj,reduction = "umap",label = T)
+p1
+```
+
+
+# markergene
+啥叫marker基因呢。和差异基因里面的上调基因有点类似，某个基因在某一簇细胞里表达量都很高，在其他簇表达量很低，那么这个基因就是这簇细胞的象征。
+
+理论上，上调和下调都算marker基因，但我们会设置 only.pos = TRUE，只关注上调。
+
+FindAllMarkers，又是一个限速步骤，随着细胞数量的增大会更慢，它会计算出所有细胞簇的marker基因，比如计算0这一簇时，就是0 vs 剩下的1-10，1-10全部算一个组。
+
+min.pct这个参数值的注意，它的意思是一个基因至少要在25%的细胞中表达。还是以0这一簇为例，就是说要么在0这一簇里25%以上的细胞中表达，要么在剩下的1-10簇里（1-10全部算一个组）25%以上的细胞中表达。这样可以去掉一些表达比例太少的基因，比例太少的话不能代表这个簇的整体情况，即使logFC很大也没有意义。
+```{r}
+library(dplyr)
+f = "markers.Rdata"
+if(!file.exists(f)){
+  markers <- FindAllMarkers(seu.obj, only.pos = TRUE,min.pct = 0.25)
+  save(markers,file = f)
+}
+load(f)
+```
+Seurat开发了一个新的方法加快FindAllMarkers的计算速度，在初次运行时它会给出提示让你安装这个包(没有提示就说明已经安装过啦)。再次提醒，这个包windows必须要安装Rtools才能装成功，mac不需要。
+
+## R语言知识补充☞github的R包安装
+```{r}
+if(!require(devtools))install.packages("devtools")
+if(!require(presto))devtools::install_github("immunogenomics/presto",upgrade = F,dependencies = T)
+if(!require(presto))devtools::install_github("presto-master.zip",upgrade = F,dependencies = T)
+```
+## 取每个细胞簇logFC排名前n的marker基因
+```{r}
+mks = markers %>% group_by(cluster) %>% top_n(n = 2, wt = avg_log2FC)
+g = unique(mks$gene)
+```
+n=2就是每个簇取前2，n= 6就是每个簇取前6
+
+很有可能有重复，就是有一些基因在不同簇中都被计为marker基因，排名都比较靠前。但有重复的话后面画图就会出错，所以保险起见都加上unique(),去除重复。
+
+
+
+# markergene 5 visualization
+每个图都是一个现成的函数画出来的，可以接受学习成本比较低。
+可以看到每个基因在所有簇里的表达情况。
+热图的一行是一个基因，一列是一个细胞（按簇排列），红色代表高表达。
+
+```{r}
+library(ggplot2)
+DoHeatmap(seu.obj, features = g) + NoLegend()+
+  scale_fill_gradientn(colors = c("#2fa1dd", "white", "#f87669"))
+```
+气泡图，红色代表高表达,气泡的大小代表基因在某一簇里的表达比例
+```{r}
+DotPlot(seu.obj, features = g,cols = "RdYlBu") +
+  RotatedAxis()
+```
+接下来的三种图，多个基因会自动分多张子图，所以不能画太多的基因，否则太丑且不直观。
+
+小提琴图，每个基因在每一簇里的表达情况。
+```{r}
+VlnPlot(seu.obj, features = g[1:2])
+```
+Featureplot，本质上还是umap图，只是换了一种着色方式，一张图对应一个基因，展示了该基因在所有细胞里的表达情况。
+```{r}
+FeaturePlot(seu.obj, features = g[1:4])
+```
+这个叫峰峦图，或者是山脊图，其实就是密度图，横坐标是基因表达量，最多的其实还是0，这种图用的比较少。
+```{r}
+RidgePlot(seu.obj, features = g[1:2])
+```
+
+
+
+
+# annotation
+注释分为手动注释和自动注释。手动注释是金标准，但费时费力费眼睛，能注释到什么程度基本上取决于背景知识。自动注释一气呵成，方便，但也有明显的局限性： > 没有把组织、疾病类型等背景知识考虑在内 > 现成的参考数据只有人类和小鼠的 > 切换不同的参考数据就会给出不同的注释结果
+## 手动注释
+手动注释需要自行查找每种可能的细胞类型已知的marker基因，可以从文献里查，可以从数据库里查。
+
+这里也叫marker基因，和前面自行计算出来的略有差别，这里是基于已有知识查找到的，xx基因是xx细胞的marker基因。例如PPBP是血小板细胞的marker基因，所以后面画图显示PPBP在哪一簇高表达那么哪一簇就是血小板。
+
+可以自己查阅文献，或者是翻一翻常用的三个数据库：
+
+http://biocc.hrbmu.edu.cn/CellMarker
+
+https://panglaodb.se/
+
+https://www.gsea-msigdb.org/gsea/msigdb/human/genesets.jsp?collection=C8
+
+如果是使用别人的公共数据，务必看看参考文献（在GSE页面上面就有），很有可能在参考文献里找到原作者使用的marker基因列表。
+
+(我们的示例数据没有参考文献，太新了，可能文章还没发出去。)
+
+我自行查找了一些marker基因，这个没什么技巧，就是数据库和文献里找，以及日常积累的(如果不确定有什么细胞类型)，如果不知道大概有什么细胞类型，可以参阅同样组织的单细胞文献，或者是参考自动注释的类型。我查找的marker基因放到了my_markers.txt文件里，文件要放在工作目录下。my_markers.txt内容如下，可以自行复制：
+
+(怕格式错乱，用代码输出，复制粘贴完要删掉井号哦。)
+```{r}
+writeLines(readLines("my_markers.txt"))
+```
+每一行放一个细胞名和一个marker基因名，如果一种细胞有多个marker基因就拆成多行。
+
+我喜欢使用逗号分隔细胞与基因，因为有时候细胞名称中间有空格，用空格或制表符做分隔会显的乱。
+
+然后是读取它，拆分为列表的格式(split)，这样画气泡图时就可以看到基因与细胞之间的对应关系了。
+```{r}
+a = read.table("my_markers.txt",sep = ",")
+gt = split(a[,2],a[,1])
+
+DotPlot(seu.obj, features = gt,cols = "RdYlBu") +
+  RotatedAxis()
+```
+列出细胞类型，方便后面复制
+```{r}
+unique(a$V1)
+```
+忽略warning，我们查阅的结果文件里面有一些表达矩阵里没有的基因，很正常。
+
+气泡图就是我们指定每个簇是什么细胞类型的依据了，是最费眼睛的部分。为了防止看错抄错，放到一个txt文件里，然后再抄比较方便。
+```{r}
+writeLines(paste0(0:11,","))
+```
+新建一个txt，把上面代码输出的结果复制粘贴到txt里面，然后照着Dotplot来填空，保存为anno.txt即可。
+
+不用按照0-11的顺序填，先看每一行又大又红的点，对应的细胞是什么。没有又大又红的只能退而求其次，看最大的点或者是最红的点。有时最大的和最红的不是同一个，就为难了，没有标准答案，我习惯是优先按照最红的，除非最红的太小了才按照最大的。。。比如1这一簇，最红的是CD8 T,最大的是NK，注释为CD8 T。
+```{r}
+celltype = read.table("anno.txt",sep = ",") 
+celltype
+```
+然后就可以给seurat object 重新规定Idents了。它现在的Idents是：
+```{r}
+levels(Idents(seu.obj))
+```
+```{r}
+levels(seu.obj)
+```
+RenameIdents实现修改分类。
+```{r}
+new.cluster.ids <- celltype$V2
+names(new.cluster.ids) <- levels(seu.obj)
+sce <- RenameIdents(seu.obj, new.cluster.ids)
+save(sce,file = "sce.Rdata")
+p2 <- DimPlot(sce, reduction = "umap", 
+              label = TRUE, pt.size = 0.5) + NoLegend()
+p1+p2
+```
+手动注释要检查是否合理，比如T细胞和NK细胞应该是在一起的，B细胞应该是单独的。
+
+## 自动注释
+最常用的自动注释R包是SingleR。它使用的参考数据是celldex里的。
+```{r}
+library(celldex)
+library(SingleR)
+ls("package:celldex")
+```
+除了4和6是小鼠的，其他都是人类的。每个参考数据的介绍要看它的帮助文档（例如?BlueprintEncodeData）
+
+celldex的运行速度受到网速限制，所以也是存在即跳过。
+
+我整理好了，链接：https://pan.baidu.com/s/1Urabmi9mQCDipMn0Ffl44g?pwd=xjls
+
+不准把我的分享链接贴出去,看见就打   
+
+可以下载对应的Rdata并放在工作目录下。
+```{r}
+f = "ref_BlueprintEncode.RData"
+if(!file.exists(f)){
+  ref <- celldex::BlueprintEncodeData()
+  save(ref,file = f)
+}
+ref <- get(load(f))
+```
+建议尝试不同的参考数据，在切换时注意，有两处”BlueprintEncodeData”，都换成别的数据名字，千万不要只改一个不改另一个，那就乱了套了。 一气呵成不用改动的SingleR：
+
+输入数据是单细胞表达矩阵；注释完就会给出每个簇对应的细胞类型；然后给表达矩阵改分类、画图。
+
+代码里有scRNA = seu.obj这样的，是因为衔接两套流程使用的是不同的变量名称，前面是seu.obj，后面是scRNA。你说为啥不查找-替换呢？因为麻烦，批量的替换又容易出错(万一你的变量名称是某个函数或者文件名称的一部分就会出错)，加上这个衔接的代码方便且不容易出错。
+```{r}
+library(BiocParallel)
+scRNA = seu.obj
+test = scRNA@assays$RNA$data
+pred.scRNA <- SingleR(test = test, 
+                      ref = ref,
+                      labels = ref$label.main, 
+                      clusters = scRNA@active.ident)
+pred.scRNA$pruned.labels
+
+##  [1] "B-cells"           "CD8+ T-cells"      "CD4+ T-cells"     
+##  [4] "CD4+ T-cells"      "CD4+ T-cells"      "B-cells"          
+##  [7] "Monocytes"         "Endothelial cells" "Fibroblasts"      
+## [10] "NK cells"          "Endothelial cells" NA
+
+new.cluster.ids <- pred.scRNA$pruned.labels
+names(new.cluster.ids) <- levels(scRNA)
+scRNA <- RenameIdents(scRNA,new.cluster.ids)
+p3 <- DimPlot(scRNA, reduction = "umap",label = T,pt.size = 0.5) + NoLegend()
+p3
+```
+
+
+# 自己的数据
+采用自动注释
+## 加载数据
+```{r}
+rm(list = ls())
+library(Seurat)
+load("../day5/obj2.Rdata")
+p1 = DimPlot(seu.obj,reduction = "umap",label = T)
+p1
+```
+## marker gene
+```{r}
+library(dplyr)
+f = "markers2.Rdata"
+if(!file.exists(f)){
+  markers <- FindAllMarkers(seu.obj, only.pos = TRUE,min.pct = 0.25)
+  save(markers,file = f)
+}
+load(f)
+```
+```{r}
+mks = markers %>% group_by(cluster) %>% top_n(n = 2, wt = avg_log2FC)
+g = unique(mks$gene)
+```
+```{r}
+DoHeatmap(seu.obj, features = g) + NoLegend()+
+  scale_fill_gradientn(colors = c("#2fa1dd", "white", "#f87669"))
+```
+```{r}
+DotPlot(seu.obj, features = g,cols = "RdYlBu") +
+  RotatedAxis()
+```
+```{r}
+VlnPlot(seu.obj, features = g[1:2])
+```
+```{r}
+FeaturePlot(seu.obj, features = g[1:4])
+```
+```{r}
+RidgePlot(seu.obj, features = g[1:2])
+```
+## annotation
+```{r}
+library(celldex)
+library(SingleR)
+ls("package:celldex")
+```
+```{r}
+f = "ref_BlueprintEncode.RData"
+if(!file.exists(f)){
+  ref <- celldex::BlueprintEncodeData()
+  save(ref,file = f)
+}
+ref <- get(load(f))
+```
+```{r}
+library(BiocParallel)
+scRNA = seu.obj
+test = scRNA@assays$RNA$data
+pred.scRNA <- SingleR(test = test, 
+                      ref = ref,
+                      labels = ref$label.main, 
+                      clusters = scRNA@active.ident)
+pred.scRNA$pruned.labels
+```
+```{r}
+new.cluster.ids <- pred.scRNA$pruned.labels
+names(new.cluster.ids) <- levels(scRNA)
+scRNA <- RenameIdents(scRNA,new.cluster.ids)
+p3 <- DimPlot(scRNA, reduction = "umap",label = T,pt.size = 0.5) + NoLegend()
+p1+p3
+```
+
+
+
+  
+
+
+
+
+
+
+

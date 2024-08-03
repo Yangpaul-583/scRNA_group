@@ -1,0 +1,506 @@
+# 10-1 单样本细胞周期
+## 0.背景知识
+
+尘封的高中生物学知识，细胞的有丝分裂，分为分裂期（M）和分裂间期（G1，S，G2），细胞处于不同的细胞周期时，代谢活跃状态和染色体的状态大不相同，直接比较表达量是不公平的。
+
+在一些数据中，细胞周期的影响很大，大到每个周期的细胞各自聚成一簇，严重影响下游的聚类和分群。有的数据中，细胞周期的影响非常之低，可以忽略不记。
+
+Seurat有自带的方法，根据在各个周期高表达的基因来计算细胞周期评分，根据评分的高低来推断细胞属于什么周期。
+
+## 1.读取数据并做好前期的质控
+### 1.1 前面使用的数据
+```{r}
+rm(list = ls())
+library(tidyverse)
+library(Seurat)
+ct = Read10X("../day05/input/")
+seu.obj <- CreateSeuratObject(counts = ct, 
+                           min.cells = 3, 
+                           min.features = 200)
+set.seed(1234)
+seu.obj = subset(seu.obj,downsample = 3000)
+seu.obj[["percent.mt"]] <- PercentageFeatureSet(seu.obj, pattern = "^MT-")
+VlnPlot(seu.obj, 
+        features = c("nFeature_RNA",
+                     "nCount_RNA", 
+                     "percent.mt"), 
+        ncol = 3,pt.size = 0.5)
+```
+```{r}
+seu.obj = subset(seu.obj,
+                nFeature_RNA < 6000 &
+                nCount_RNA < 30000 &
+                percent.mt < 18)
+```
+### 1.2 marrow
+这个数据来自Seurat 的细胞周期Vignette,是一个严重受到细胞周期影响的数据。
+
+https://satijalab.org/seurat/articles/cell_cycle_vignette
+```{r}
+exp.mat <- read.delim("nestorawa_forcellcycle_expressionMatrix.txt",row.names = 1)
+marrow <- CreateSeuratObject(counts = exp.mat,
+                             project = "b",
+                             min.cells = 3, 
+                             min.features = 200)
+marrow[["percent.mt"]] <- PercentageFeatureSet(marrow, pattern = "^MT-")
+head(marrow@meta.data, 3)
+
+##          orig.ident nCount_RNA nFeature_RNA percent.mt
+## Prog_013       Prog    2563086        10208   5.187809
+## Prog_019       Prog    3030619         9990   5.965877
+## Prog_031       Prog    1293487        10192   5.664456
+
+VlnPlot(marrow, 
+        features = c("nFeature_RNA",
+                     "nCount_RNA", 
+                     "percent.mt"), 
+        ncol = 3,pt.size = 0.5)
+```
+2.计算细胞周期评分
+因为有两个数据要计算，所以写个函数，避免代码复制粘贴。
+```{r}
+check_cc =  function(ob){
+  s.genes <- intersect(cc.genes$s.genes,rownames(ob))
+  g2m.genes <- intersect(cc.genes$g2m.genes,rownames(ob))
+  ob = ob %>% 
+  NormalizeData() %>%  
+  FindVariableFeatures() %>%  
+  CellCycleScoring(s.features = s.genes, 
+                   g2m.features = g2m.genes) %>%
+  ScaleData(features = rownames(.)) %>%  
+  RunPCA(features = c(s.genes,g2m.genes))
+  return(ob)
+}
+ch1 = check_cc(seu.obj)
+head(ch1@meta.data)
+
+##                       orig.ident nCount_RNA nFeature_RNA percent.mt     S.Score
+## AAACCCACAGTCGGTC-1 SeuratProject       4243         1256   6.292717 -0.02545080
+## AAACGAAAGAATCGCG-1 SeuratProject       7307         2577   2.572875  0.03719043
+## AAAGAACAGCTTACGT-1 SeuratProject       8154         1881   4.083885  0.04363704
+## AAAGAACAGGTTCATC-1 SeuratProject       8223         2182   4.377964 -0.05930417
+## AAAGAACAGTCTGTAC-1 SeuratProject       3884         1377   4.763131 -0.02251541
+## AAAGAACTCCACCTCA-1 SeuratProject       3997         1307   3.402552  0.01273964
+##                      G2M.Score Phase
+## AAACCCACAGTCGGTC-1  0.05694222   G2M
+## AAACGAAAGAATCGCG-1 -0.12520510     S
+## AAAGAACAGCTTACGT-1 -0.02283322     S
+## AAAGAACAGGTTCATC-1 -0.03018975    G1
+## AAAGAACAGTCTGTAC-1  0.02168140   G2M
+## AAAGAACTCCACCTCA-1 -0.13158839     S
+```
+CellCycleScoring就是计算细胞周期评分的函数。
+
+## 3.比较两个数据的细胞周期评分和PCA
+可以看到这个函数处理完后，meta.data里面多了4列，分别是s和g2m的评分以及推断的细胞周期。
+```{r}
+table(ch1$Phase)
+
+## 
+##   G1  G2M    S 
+## 1555  482  863
+
+ch2 = check_cc(marrow)
+table(ch2$Phase)
+
+## 
+##  G1 G2M   S 
+## 279 183 312
+
+PCAPlot(ch1,group.by = "Phase")+ PCAPlot(ch2,group.by = "Phase")
+```
+这样的比较不太直观，把坐标调到相同范围。xlim和ylim是设置横纵坐标范围，要按需调整到把两个图的点都能放进去。例如图1是横坐标-60到5，纵坐标-6到5，图二横坐标范围-10到15，纵坐标范围-10到15，就设置为横坐标-60到15，纵坐标-10到15。
+```{r}
+library(patchwork)
+PCAPlot(ch1,group.by = "Phase")+ 
+  PCAPlot(ch2,group.by = "Phase")&
+  xlim(-60,15)&
+  ylim(-10,15)
+```
+再比较一下S.Score和G2M.Score
+```{r}
+p1 = VlnPlot(ch1,"S.Score",group.by = "Phase")
+p2 = VlnPlot(ch2,"S.Score",group.by = "Phase")
+wrap_plots(p1,p2,nrow = 1) & ylim(-0.6,0.6)
+```
+```{r}
+p1 = VlnPlot(ch1,"G2M.Score",group.by = "Phase")
+p2 = VlnPlot(ch2,"G2M.Score",group.by = "Phase")
+wrap_plots(p1,p2,nrow = 1) & ylim(-0.5,1)
+```
+比较每一个细胞的S.Score和G2M.Score，就可以理解到每个细胞属于什么细胞周期是怎么得出来的了:每个细胞都有S.score和G2M.score，如果S.score和G2M.score都是负的就判断为G1期，否则，S.score高就是S期，G2M.score高就是G2M期。可以验证来理解：
+```{r}
+table(ch1$Phase)
+## 
+##   G1  G2M    S 
+## 1555  482  863
+sum(ch1$S.Score<0 & ch1$G2M.Score <0) #G1
+## [1] 1555
+sum(ch1$S.Score>0 & ch1$S.Score > ch1$G2M.Score) #S
+## [1] 863
+sum(ch1$G2M.Score>0 & ch1$S.Score < ch1$G2M.Score) #G2M
+## [1] 482
+```
+如果是大多数点都集中在0点附近的，就可以不用去除细胞周期的影响！，分布范围较广或者是有较多的离群值那就需要要去除。
+
+让我们来比较一下去除和不去除细胞周期影响的下游注释看有没有区别吧。
+
+## 4.比较去除和不去处细胞周期影响的下游注释
+### 4.1 不考虑细胞周期的降维聚类分群
+```{r}
+f = "ob1.Rdata"
+if(!file.exists(f)){
+  ob1 = seu.obj %>% 
+  NormalizeData() %>%  
+  FindVariableFeatures() %>%  
+  ScaleData(features = rownames(.)) %>%  
+  RunPCA(features = VariableFeatures(.))  %>%
+  FindNeighbors(dims = 1:15) %>% 
+  FindClusters(resolution = 0.5) %>% 
+  RunUMAP(dims = 1:15) %>% 
+  RunTSNE(dims = 1:15)
+  save(ob1,file = f)
+}
+load(f)
+```
+4.2 考虑细胞周期的降维聚类分群
+其实是根据s期和g2m期各自有代表性的基因来打分，然后在ScaleData函数中加上vars.to.regress参数来消除影响。
+
+这里的cc.genes是Seurat包里自带的数据，无需任何赋值或加载的操作，可以直接使用。
+```{r}
+s.genes <- intersect(cc.genes$s.genes,rownames(seu.obj))
+g2m.genes <- intersect(cc.genes$g2m.genes,rownames(seu.obj))
+f = "ob2.Rdata"
+if(!file.exists(f)){
+  ob2 = seu.obj %>% 
+  NormalizeData() %>%  
+  FindVariableFeatures() %>%  
+  CellCycleScoring(s.features = s.genes, g2m.features = g2m.genes) %>%
+  ScaleData(vars.to.regress = c("S.Score", "G2M.Score"),features = rownames(.)) %>%  #运行极其慢
+  RunPCA(features = VariableFeatures(.))  %>%
+  FindNeighbors(dims = 1:15) %>% 
+  FindClusters(resolution = 0.5) %>% 
+  RunUMAP(dims = 1:15) %>% 
+  RunTSNE(dims = 1:15)
+  save(ob2,file = f)
+}
+load(f)
+p1 <- DimPlot(ob1, reduction = "umap",label = T)+NoLegend()
+p2 <- DimPlot(ob2, reduction = "umap",label = T)+NoLegend()
+p1+p2
+```
+简单点用singleR来注释
+```{r}
+library(celldex)
+library(SingleR)
+ls("package:celldex")
+
+## [1] "BlueprintEncodeData"              "DatabaseImmuneCellExpressionData"
+## [3] "HumanPrimaryCellAtlasData"        "ImmGenData"                      
+## [5] "MonacoImmuneData"                 "MouseRNAseqData"                 
+## [7] "NovershternHematopoieticData"
+
+f = "../day06/ref_BlueprintEncode.RData"
+if(!file.exists(f)){
+  ref <- celldex::BlueprintEncodeData()
+  save(ref,file = f)
+}
+ref <- get(load(f))
+library(BiocParallel)
+scRNA = ob1
+test = scRNA@assays$RNA$data
+pred.scRNA <- SingleR(test = test, 
+                      ref = ref,
+                      labels = ref$label.main, 
+                      clusters = scRNA@active.ident)
+new.cluster.ids <- pred.scRNA$pruned.labels
+names(new.cluster.ids) <- levels(scRNA)
+scRNA <- RenameIdents(scRNA,new.cluster.ids)
+p3 <- DimPlot(scRNA, reduction = "umap",label = T,pt.size = 0.5) + NoLegend()
+m = scRNA
+```
+解释一下为什么会有scRNA = ob1,m = scRNA这样的代码：
+
+当然是为了少改代码犯错误啦。两次注释的代码是一样的，如果把scRNA这个变量名替换掉就麻烦，别说可以全部替换，万一你替换的变量名称是函数或者文件名等东西的一部分，那不还得报错还得改回去？所以移花接木另行赋值是个更好的选择。
+```{r}
+scRNA = ob2
+test = scRNA@assays$RNA$data
+pred.scRNA <- SingleR(test = test, 
+                      ref = ref,
+                      labels = ref$label.main, 
+                      clusters = scRNA@active.ident)
+new.cluster.ids <- pred.scRNA$pruned.labels
+names(new.cluster.ids) <- levels(scRNA)
+scRNA <- RenameIdents(scRNA,new.cluster.ids)
+p4 <- DimPlot(scRNA, reduction = "umap",label = T,pt.size = 0.5) + NoLegend()
+p3+p4
+```
+```{r}
+table(as.character(Idents(m))==as.character(Idents(scRNA)))
+
+## 
+## FALSE  TRUE 
+##   151  2723
+```
+去不去除当然还是有区别的，如果差太多那就采用去除后的结果，就是比较费计算资源。
+
+今日任务：跑通代码交最后一张图就行啦
+
+
+
+
+
+
+
+
+# 10-2 多样本细胞周期
+## 0.背景知识
+尘封的高中生物学知识，细胞的有丝分裂，分为分裂期（M）和分裂间期（G1，S，G2），细胞处于不同的细胞周期时，代谢活跃状态和染色体的状态大不相同，直接比较表达量是不公平的。
+
+在一些数据中，细胞周期的影响很大，大到每个周期的细胞各自聚成一簇，严重影响下游的聚类和分群。有的数据中，细胞周期的影响非常之低，可以忽略不记。
+
+Seurat有自带的方法，根据在各个周期高表达的基因来计算细胞周期评分，根据评分的高低来推断细胞属于什么周期。
+## 1.读取数据并做好前期的质控
+### 1.1 前面使用的数据
+```{r}
+rm(list = ls())
+library(tidyverse)
+library(Seurat)
+load("../day07/sce.all.Rdata") #day7读取并抽样的数据
+sce.all[["percent.mt"]] <- PercentageFeatureSet(sce.all, pattern = "^MT-")
+sce.all[["percent.rp"]] <- PercentageFeatureSet(sce.all, pattern = "^RP[SL]")
+sce.all[["percent.hb"]] <- PercentageFeatureSet(sce.all, pattern = "^HB[^(P)]")
+
+VlnPlot(sce.all, 
+        features = c("nFeature_RNA",
+                     "nCount_RNA", 
+                     "percent.mt",
+                     "percent.rp",
+                     "percent.hb"),
+        ncol = 3,pt.size = 0.5, group.by = "orig.ident")
+```
+```{r}
+#根据小提琴图指定指标去掉离群值
+sce.all = subset(sce.all,percent.mt < 20&
+                   nCount_RNA < 40000 &
+                   nFeature_RNA < 6000)
+table(sce.all@meta.data$orig.ident)
+
+## 
+## sample1 sample2 sample3 sample4 sample5 sample6 
+##     687     622     683     686     678     675
+
+seu.obj = sce.all
+```
+### 1.2 marrow
+这个数据来自Seurat 的细胞周期Vignette,是一个严重受到细胞周期影响的数据。
+
+https://satijalab.org/seurat/articles/cell_cycle_vignette
+```{r}
+exp.mat <- read.delim("nestorawa_forcellcycle_expressionMatrix.txt",row.names = 1)
+marrow <- CreateSeuratObject(counts = exp.mat,
+                             project = "b",
+                             min.cells = 3, 
+                             min.features = 200)
+marrow[["percent.mt"]] <- PercentageFeatureSet(marrow, pattern = "^MT-")
+head(marrow@meta.data, 3)
+
+##          orig.ident nCount_RNA nFeature_RNA percent.mt
+## Prog_013       Prog    2563086        10208   5.187809
+## Prog_019       Prog    3030619         9990   5.965877
+## Prog_031       Prog    1293487        10192   5.664456
+
+VlnPlot(marrow, 
+        features = c("nFeature_RNA",
+                     "nCount_RNA", 
+                     "percent.mt"), 
+        ncol = 3,pt.size = 0.5)
+```
+
+## 2.计算细胞周期评分
+因为有两个数据要计算，所以写个函数，避免代码复制粘贴。
+```{r}
+check_cc =  function(ob){
+  s.genes <- intersect(cc.genes$s.genes,rownames(ob))
+  g2m.genes <- intersect(cc.genes$g2m.genes,rownames(ob))
+  ob = ob %>% 
+  NormalizeData() %>%  
+  FindVariableFeatures() %>%  
+  CellCycleScoring(s.features = s.genes, 
+                   g2m.features = g2m.genes) %>%
+  ScaleData(features = rownames(.)) %>%  
+  RunPCA(features = c(s.genes,g2m.genes))
+  return(ob)
+}
+ch1 = check_cc(seu.obj)
+head(ch1@meta.data)
+
+##                      orig.ident nCount_RNA nFeature_RNA percent.mt percent.rp
+## AAAGAACAGTCTGTAC-1_1    sample1       3884         1377  4.7631308   23.09475
+## AAAGGGCTCTCGCGTT-1_1    sample1       1615          721  0.6191950   35.85139
+## AAAGGTACAATTGGTC-1_1    sample1       3806         1215  7.7771939   37.12559
+## AAAGTGAGTATCGAAA-1_1    sample1       5554         1456  2.6647461   38.78286
+## AAAGTGATCTCAACCC-1_1    sample1       3111         1328  6.0109290   28.99389
+## AACAAAGGTAAGGTCG-1_1    sample1       3658         1243  0.3280481   42.91963
+##                      percent.hb     S.Score   G2M.Score Phase
+## AAAGAACAGTCTGTAC-1_1 0.00000000 -0.02127710  0.07966691   G2M
+## AAAGGGCTCTCGCGTT-1_1 0.00000000 -0.06464373 -0.06414392    G1
+## AAAGGTACAATTGGTC-1_1 0.00000000 -0.03501751 -0.09126893    G1
+## AAAGTGAGTATCGAAA-1_1 0.00000000  0.02832430  0.06676713   G2M
+## AAAGTGATCTCAACCC-1_1 0.06428801 -0.07376491 -0.02765641    G1
+## AACAAAGGTAAGGTCG-1_1 0.00000000  0.03440580  0.01151133     S
+```
+CellCycleScoring就是计算细胞周期评分的函数。
+## 3.比较两个数据的细胞周期评分和PCA
+可以看到这个函数处理完后，meta.data里面多了4列，分别是s和g2m的评分以及推断的细胞周期。
+```{r}
+table(ch1$Phase)
+
+## 
+##   G1  G2M    S 
+## 1942 1142  947
+
+ch2 = check_cc(marrow)
+table(ch2$Phase)
+
+## 
+##  G1 G2M   S 
+## 279 183 312
+
+PCAPlot(ch1,group.by = "Phase")+ PCAPlot(ch2,group.by = "Phase")
+```
+这样的比较不太直观，把坐标调到相同范围。xlim和ylim是设置横纵坐标范围，要按需调整到把两个图的点都能放进去。例如图1是横坐标-50到5，纵坐标-20到正20，图二横坐标范围-10到15，纵坐标范围-10到15，就设置为横坐标-50到15，纵坐标-20到20。
+```{r}
+library(patchwork)
+PCAPlot(ch1,group.by = "Phase")+ 
+  PCAPlot(ch2,group.by = "Phase")&
+  xlim(-50,15)&
+  ylim(-20,20)
+```
+再比较一下S.Score和G2M.Score
+```{r}
+p1 = VlnPlot(ch1,"S.Score",group.by = "Phase")
+p2 = VlnPlot(ch2,"S.Score",group.by = "Phase")
+wrap_plots(p1,p2,nrow = 1) & ylim(-0.6,0.6)
+```
+```{r}
+p1 = VlnPlot(ch1,"G2M.Score",group.by = "Phase")
+p2 = VlnPlot(ch2,"G2M.Score",group.by = "Phase")
+wrap_plots(p1,p2,nrow = 1) & ylim(-0.5,1)
+```
+比较每一个细胞的S.Score和G2M.Score，就可以理解到每个细胞属于什么细胞周期是怎么得出来的了:每个细胞都有S.score和G2M.score，如果S.score和G2M.score都是负的就判断为G1期，否则，S.score高就是S期，G2M.score高就是G2M期。可以验证来理解：
+```{r}
+table(ch1$Phase)
+## 
+##   G1  G2M    S 
+## 1942 1142  947
+sum(ch1$S.Score<0 & ch1$G2M.Score <0) #G1
+## [1] 1942
+sum(ch1$S.Score>0 & ch1$S.Score > ch1$G2M.Score) #S
+## [1] 947
+sum(ch1$G2M.Score>0 & ch1$S.Score < ch1$G2M.Score) #G2M
+## [1] 1142
+```
+如果是大多数点都集中在0点附近的，就可以不用去除细胞周期的影响！，分布范围较广或者是有较多的离群值那就需要要去除。
+
+让我们来比较一下去除和不去除细胞周期影响的下游注释看有没有区别吧。
+## 4.比较去除和不去处细胞周期影响的下游注释
+### 4.1不考虑细胞周期的降维聚类分群
+```{r}
+library(harmony)
+f = "ob1m.Rdata"
+if(!file.exists(f)){
+  ob1 = seu.obj %>% 
+  NormalizeData() %>%  
+  FindVariableFeatures() %>%  
+  ScaleData(features = rownames(.)) %>%  
+  RunPCA(pc.genes = VariableFeatures(.))  %>%
+  RunHarmony("orig.ident") %>%
+  FindNeighbors(dims = 1:15, reduction = "harmony") %>% 
+  FindClusters(resolution = 0.5) %>% 
+  RunUMAP(dims = 1:15,reduction = "harmony") %>% 
+  RunTSNE(dims = 1:15,reduction = "harmony")
+  save(ob1,file = f)
+}
+load(f)
+```
+### 4.2考虑细胞周期的降维聚类分群
+其实是根据s期和g2m期各自有代表性的基因来打分，然后在ScaleData函数中加上vars.to.regress参数来消除影响。
+
+这里的cc.genes是Seurat包里自带的数据，无需任何赋值或加载的操作，可以直接使用。
+```{r}
+s.genes <- intersect(cc.genes$s.genes,rownames(seu.obj))
+g2m.genes <- intersect(cc.genes$g2m.genes,rownames(seu.obj))
+f = "ob2m.Rdata"
+if(!file.exists(f)){
+  ob2 = seu.obj %>% 
+  NormalizeData() %>%  
+  FindVariableFeatures() %>%  
+  CellCycleScoring(s.features = s.genes, g2m.features = g2m.genes) %>%
+  ScaleData(vars.to.regress = c("S.Score", "G2M.Score"),features = rownames(.)) %>%  #运行极其慢
+  RunPCA(pc.genes = VariableFeatures(.))  %>%
+  RunHarmony("orig.ident") %>%
+  FindNeighbors(dims = 1:15, reduction = "harmony") %>% 
+  FindClusters(resolution = 0.5) %>% 
+  RunUMAP(dims = 1:15,reduction = "harmony") %>% 
+  RunTSNE(dims = 1:15,reduction = "harmony")
+  save(ob2,file = f)
+}
+load(f)
+p1 <- DimPlot(ob1, reduction = "umap",label = T)+NoLegend()
+p2 <- DimPlot(ob2, reduction = "umap",label = T)+NoLegend()
+p1+p2
+```
+简单点用singleR来注释
+```{r}
+library(celldex)
+library(SingleR)
+ls("package:celldex")
+
+## [1] "BlueprintEncodeData"              "DatabaseImmuneCellExpressionData"
+## [3] "HumanPrimaryCellAtlasData"        "ImmGenData"                      
+## [5] "MonacoImmuneData"                 "MouseRNAseqData"                 
+## [7] "NovershternHematopoieticData"
+
+f = "../day06/ref_BlueprintEncode.RData"
+if(!file.exists(f)){
+  ref <- celldex::BlueprintEncodeData()
+  save(ref,file = f)
+}
+ref <- get(load(f))
+library(BiocParallel)
+scRNA = ob1
+test = scRNA@assays$RNA$data
+pred.scRNA <- SingleR(test = test, 
+                      ref = ref,
+                      labels = ref$label.main, 
+                      clusters = scRNA@active.ident)
+new.cluster.ids <- pred.scRNA$pruned.labels
+names(new.cluster.ids) <- levels(scRNA)
+scRNA <- RenameIdents(scRNA,new.cluster.ids)
+p3 <- DimPlot(scRNA, reduction = "umap",label = T,pt.size = 0.5) + NoLegend()
+m = scRNA
+```
+解释一下为什么会有scRNA = ob1,m = scRNA这样的代码：
+
+当然是为了少改代码犯错误啦。两次注释的代码是一样的，如果把scRNA这个变量名替换掉就麻烦，别说可以全部替换，万一你替换的变量名称是函数或者文件名等东西的一部分，那不还得报错还得改回去？所以移花接木另行赋值是个更好的选择。
+```{r}
+scRNA = ob2
+test = scRNA@assays$RNA$data
+pred.scRNA <- SingleR(test = test, 
+                      ref = ref,
+                      labels = ref$label.main, 
+                      clusters = scRNA@active.ident)
+new.cluster.ids <- pred.scRNA$pruned.labels
+names(new.cluster.ids) <- levels(scRNA)
+scRNA <- RenameIdents(scRNA,new.cluster.ids)
+p4 <- DimPlot(scRNA, reduction = "umap",label = T,pt.size = 0.5) + NoLegend()
+p3+p4
+```
+```{r}
+table(as.character(Idents(m))==as.character(Idents(scRNA)))
+
+## 
+## FALSE  TRUE 
+##   400  3631
+```

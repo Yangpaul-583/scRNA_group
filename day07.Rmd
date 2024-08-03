@@ -1,0 +1,482 @@
+多样本处理
+# 下载并整理数据
+```{r}
+untar("GSE231920_RAW.tar",exdir = "GSE231920_RAW")#解包
+library(stringr)
+fs = paste0("GSE231920_RAW/",dir("GSE231920_RAW/"))
+fs#每个样本的数据文件
+
+##  [1] "GSE231920_RAW/GSM7306054_sample1_barcodes.tsv.gz"
+##  [2] "GSE231920_RAW/GSM7306054_sample1_features.tsv.gz"
+##  [3] "GSE231920_RAW/GSM7306054_sample1_matrix.mtx.gz"  
+##  [4] "GSE231920_RAW/GSM7306055_sample2_barcodes.tsv.gz"
+##  [5] "GSE231920_RAW/GSM7306055_sample2_features.tsv.gz"
+##  [6] "GSE231920_RAW/GSM7306055_sample2_matrix.mtx.gz"  
+##  [7] "GSE231920_RAW/GSM7306056_sample3_barcodes.tsv.gz"
+##  [8] "GSE231920_RAW/GSM7306056_sample3_features.tsv.gz"
+##  [9] "GSE231920_RAW/GSM7306056_sample3_matrix.mtx.gz"  
+## [10] "GSE231920_RAW/GSM7306057_sample4_barcodes.tsv.gz"
+## [11] "GSE231920_RAW/GSM7306057_sample4_features.tsv.gz"
+## [12] "GSE231920_RAW/GSM7306057_sample4_matrix.mtx.gz"  
+## [13] "GSE231920_RAW/GSM7306058_sample5_barcodes.tsv.gz"
+## [14] "GSE231920_RAW/GSM7306058_sample5_features.tsv.gz"
+## [15] "GSE231920_RAW/GSM7306058_sample5_matrix.mtx.gz"  
+## [16] "GSE231920_RAW/GSM7306059_sample6_barcodes.tsv.gz"
+## [17] "GSE231920_RAW/GSM7306059_sample6_features.tsv.gz"
+## [18] "GSE231920_RAW/GSM7306059_sample6_matrix.mtx.gz"
+
+samples = dir("GSE231920_RAW/") %>% str_split_i(pattern = "_",i = 2) %>% unique();samples
+
+## [1] "sample1" "sample2" "sample3" "sample4" "sample5" "sample6"
+```
+```{r}
+dir() # 列出工作目录下的文件
+
+##  [1] "day7.Rproj"                     "GSE221646"                     
+##  [3] "GSE231920_eSet.Rdata"           "GSE231920_RAW"                 
+##  [5] "GSE231920_RAW.tar"              "GSE231920_series_matrix.txt.gz"
+##  [7] "multisamples.html"              "multisamples.rmd"              
+##  [9] "obj.Rdata"                      "p1.png"                        
+## [11] "p2.png"                         "p3.png"                        
+## [13] "p4.png"                         "sce.all.Rdata"
+
+dir(pattern = ".R$") #列出工作目录下以.R结尾的文件 $表示以……结尾
+
+## character(0)
+
+dir(pattern = ".R") 
+
+## [1] "day7.Rproj"           "GSE231920_eSet.Rdata" "GSE231920_RAW"       
+## [4] "GSE231920_RAW.tar"    "obj.Rdata"            "sce.all.Rdata"
+
+file.create("douhua.txt") #用代码创建文件
+
+## [1] TRUE
+
+file.exists("douhua.txt") #某文件在工作目录下是否存在
+
+## [1] TRUE
+
+file.remove("douhua.txt") #用代码删除文件
+
+## [1] TRUE
+
+file.exists("douhua.txt") #删掉了就不存在啦
+
+## [1] FALSE
+
+## 可以批量的新建和删除
+f = paste0("douhua",1:10,".txt")
+file.create(f)
+
+##  [1] TRUE TRUE TRUE TRUE TRUE TRUE TRUE TRUE TRUE TRUE
+
+file.remove(f)
+
+##  [1] TRUE TRUE TRUE TRUE TRUE TRUE TRUE TRUE TRUE TRUE
+
+```
+```{r}
+lapply(1:4, print)
+
+my_install = function(pkg){
+  if (!require(pkg,character.only = T))install.packages(pkg,update = F,ask = F)
+}
+
+if (!require("tidyr",character.only = T))install.packages("tidyr",update = F,ask = F)
+
+my_install("tidyr")
+my_install("dplyr")
+my_install("stringr")
+
+ps = c("tidyr","dplyr","stringr")
+lapply(ps, my_install)
+```
+samples是从文件名中提取到样本名，不同的数据样本名字在哪个部分是不一定的。
+
+我们这个例子是：用str_split_i把文件名称按照"_"作为分隔符(pattern = "_")分成多个部分(比如GSM7306054_sample1_barcodes.tsv.gz被分成GSM7306054、sample1、barcodes.tsv.gz三个部分)，我们需要的是第2个部分（i=2）,即sample1。
+
+
+有多个样本，就要每个样本单独一个文件夹，每个文件夹里3个固定名称的文件，不可以有前缀的。
+
+所以接下来需要：
+
+1.为每个样本创建单独的文件夹
+
+2.把每个样本的三个文件复制进去
+
+3.所有文件改名，去掉前缀
+
+### 1.5.1 为每个样本创建单独的文件夹
+这里用到lapply套自定义函数实现了批量操作。
+```{r}
+ctr = function(s){
+  ns = paste0("01_data/",s)
+  if(!file.exists(ns))dir.create(ns,recursive = T)
+}
+lapply(samples, ctr)
+```
+### 1.5.2 每个样本的三个文件复制到单独的文件夹
+懒于再给函数起个名字了，直接放在lapply第二个参数的位置上也是可以的。
+```{r}
+lapply(fs, function(s){
+  #s = fs[1]
+  for(i in 1:length(samples)){
+    #i = 1
+    if(str_detect(s,samples[[i]])){
+      file.copy(s,paste0("01_data/",samples[[i]]))
+    }
+  }
+})
+```
+无需理会NULL，这里是在操纵文件，没有产生任何数据结果，所以就NULL(NULL就是什么都没有的意思)
+
+代码里面有#s = fs[1]和#i = 1是因为写函数的过程是需要调试的，不是一遍写成功的。所以先把一个具体的值代入进去，把函数的代码调试成功再批量操作。代数调试的操作只在写函数时用到，用完打上#变成注释，函数在运行时就不会执行#号后面的代码了。
+
+### 1.5.3 所有文件改名，去掉前缀。
+```{r}
+on = paste0("01_data/",dir("01_data/",recursive = T));on
+```
+```{r}
+nn = str_remove(on,"GSM/d+_sample/d_");nn
+```
+```{r}
+file.rename(on,nn)
+```
+修改文件名时，路径时要从工作目录之下开始写的，比如01_data/sample5/GSM7306058_sample5_barcodes.tsv.gz可以，只写GSM7306058_sample5_barcodes.tsv.gz就不行。
+
+\d(两个斜杠一个d，平台有可能把斜杠吃了，注意)是正则表达式里的任意数字，+代表匹配一次或多次，所以就会把所有的前缀删掉。换不同数据时需要自行改动。正则表达式可以让AI写，然后用Rstudio检验是否达到了目的。
+
+# 批量读取
+本数据有6w个细胞，自己电脑读取会有困难，我读取并抽样，保存了sce.all.Rdata，就是前面让和tar文件一起保存的那个数据。
+
+再次强调，抽样是为了减少计算量，还是抽样，实战中不能抽样哦。
+
+下面的代码设置了存在即跳过，只要你把Rdata文件放在工作目录下就会自动跳过这段了，64G及以上的电脑可以跑，32和16的就不要尝试啦！
+```{r}
+rm(list = ls())
+library(Seurat)
+rdaf = "sce.all.Rdata"
+if(!file.exists(rdaf)){
+  f = dir("01_data/")
+  scelist = list() #创建空的列表，下面的for循环每执行一次，scelist里面就会多一个元素。
+  for(i in 1:length(f)){
+    pda <- Read10X(paste0("01_data/",f[[i]]))
+    scelist[[i]] <- CreateSeuratObject(counts = pda, 
+                                       project = f[[i]],
+                                       min.cells = 3,
+                                       min.features = 200)
+    print(dim(scelist[[i]]))#输出每个文件的基因数和细胞数
+  }
+  sce.all = merge(scelist[[1]],scelist[-1]) #合并多个对象
+  sce.all = JoinLayers(sce.all) 
+  #merge后，每个样本的表达矩阵是一个独立的的layer，JoinLayers是合并为一个表达矩阵
+  set.seed(335)
+  sce.all = subset(sce.all,downsample=700)#每个样本抽700个细胞
+  save(sce.all,file = rdaf)
+}
+load(rdaf)
+head(sce.all@meta.data)
+
+##                      orig.ident nCount_RNA nFeature_RNA
+## AAAGAACAGTCTGTAC-1_1    sample1       3884         1377
+## AAAGGGCTCTCGCGTT-1_1    sample1       1615          721
+## AAAGGTACAATTGGTC-1_1    sample1       3806         1215
+## AAAGTGAGTATCGAAA-1_1    sample1       5554         1456
+## AAAGTGATCTCAACCC-1_1    sample1       3111         1328
+## AACAAAGGTAAGGTCG-1_1    sample1       3658         1243
+
+table(sce.all$orig.ident) #每个样本多少细胞
+
+## 
+## sample1 sample2 sample3 sample4 sample5 sample6 
+##     700     700     700     700     700     700
+
+sum(table(Idents(sce.all)))#细胞总数
+
+## [1] 4200
+```
+
+# 质控指标
+除了线粒体基因，核糖体和红细胞基因也是常见的过滤指标，也可以画画看（可选），如果有离群值，也可以过滤掉。
+
+还是正则表达式来匹配基因名字，这里不用改动，想了解具体的意思仍然是可以让AI来解读。
+```{r}
+sce.all[["percent.mt"]] <- PercentageFeatureSet(sce.all, pattern = "^MT-")
+sce.all[["percent.rp"]] <- PercentageFeatureSet(sce.all, pattern = "^RP[SL]")
+sce.all[["percent.hb"]] <- PercentageFeatureSet(sce.all, pattern = "^HB[^(P)]")
+
+head(sce.all@meta.data, 3)
+
+##                      orig.ident nCount_RNA nFeature_RNA percent.mt percent.rp
+## AAAGAACAGTCTGTAC-1_1    sample1       3884         1377   4.763131   23.09475
+## AAAGGGCTCTCGCGTT-1_1    sample1       1615          721   0.619195   35.85139
+## AAAGGTACAATTGGTC-1_1    sample1       3806         1215   7.777194   37.12559
+##                      percent.hb
+## AAAGAACAGTCTGTAC-1_1          0
+## AAAGGGCTCTCGCGTT-1_1          0
+## AAAGGTACAATTGGTC-1_1          0
+
+VlnPlot(sce.all, 
+        features = c("nFeature_RNA",
+                     "nCount_RNA", 
+                     "percent.mt",
+                     "percent.rp",
+                     "percent.hb"),
+        ncol = 3,pt.size = 0.5, group.by = "orig.ident")
+```
+```{r}
+#根据小提琴图指定指标去掉离群值
+sce.all = subset(sce.all,percent.mt < 20&
+                   nCount_RNA < 40000 &
+                   nFeature_RNA < 6000)
+table(sce.all@meta.data$orig.ident)
+
+## 
+## sample1 sample2 sample3 sample4 sample5 sample6 
+##     687     622     683     686     678     675
+```
+多样本的小提琴图横坐标就是样本名称了。这里我们虽然化了核糖体和红细胞基因，但没有用到它来过滤。
+
+# 整合降维聚类分群
+多样本的整合，使用harmony，它需要的计算资源少，且准确程度高，是最受欢迎的方法。
+
+```{r}
+f = "obj.Rdata"
+library(harmony)
+if(!file.exists(f)){
+  sce.all = sce.all %>% 
+    NormalizeData() %>%  
+    FindVariableFeatures() %>%  
+    ScaleData(features = rownames(.)) %>%  
+    RunPCA(pc.genes = VariableFeatures(.))  %>%
+    RunHarmony("orig.ident") %>%
+    FindNeighbors(dims = 1:15, reduction = "harmony") %>% 
+    FindClusters(resolution = 0.5) %>% 
+    RunUMAP(dims = 1:15,reduction = "harmony") %>% 
+    RunTSNE(dims = 1:15,reduction = "harmony")
+  save(sce.all,file = f)
+}
+load(f)
+ElbowPlot(sce.all)
+```
+```{r}
+p1 =  DimPlot(sce.all, reduction = "umap",label = T,pt.size = 0.5)+ NoLegend();p1
+```
+```{r}
+DimPlot(sce.all, reduction = "umap",pt.size = 0.5,group.by = "orig.ident")
+```
+group.by = "orig.ident"就会按照样本来分配颜色。检查一下去除样本间批次效应的效果如何，在umap图上面看，糊在一起，没有每个样本自成一簇，就说明效果还可以。如果效果不太好，可以比较一下其他的去除批次效应的方法(一般没啥必要)。
+
+https://satijalab.org/seurat/articles/seurat5_integration
+
+# 细胞类型注释
+多样本的注释和单样本的是一样的。
+```{r}
+library(celldex)
+library(SingleR)
+ls("package:celldex")
+
+## [1] "BlueprintEncodeData"              "DatabaseImmuneCellExpressionData"
+## [3] "HumanPrimaryCellAtlasData"        "ImmGenData"                      
+## [5] "MonacoImmuneData"                 "MouseRNAseqData"                 
+## [7] "NovershternHematopoieticData"
+
+f = "../day06/ref_BlueprintEncode.RData"
+#用了昨天文件夹里的数据，day6是昨天的文件夹名，按需修改
+if(!file.exists(f)){
+  ref <- celldex::BlueprintEncodeData()
+  save(ref,file = f)
+}
+ref <- get(load(f))
+library(BiocParallel)
+scRNA = sce.all
+test = scRNA@assays$RNA$data
+pred.scRNA <- SingleR(test = test, 
+                      ref = ref,
+                      labels = ref$label.main, 
+                      clusters = scRNA@active.ident)
+pred.scRNA$pruned.labels
+
+##  [1] "CD4+ T-cells"      "Fibroblasts"       "B-cells"          
+##  [4] "CD8+ T-cells"      "Neutrophils"       "Monocytes"        
+##  [7] "Adipocytes"        "CD4+ T-cells"      "B-cells"          
+## [10] "NK cells"          "Fibroblasts"       "Adipocytes"       
+## [13] "Monocytes"         "Endothelial cells" "Monocytes"
+
+new.cluster.ids <- pred.scRNA$pruned.labels
+names(new.cluster.ids) <- levels(scRNA)
+scRNA <- RenameIdents(scRNA,new.cluster.ids)
+save(scRNA,file = "scRNA.Rdata")
+p2 <- DimPlot(scRNA, reduction = "umap",label = T,pt.size = 0.5) + NoLegend()
+p1+p2
+```
+如果是没有分组的多样本数据，到这里就结束了。下面是有分组的多样本数据👇
+
+# 分组可视化及组间细胞比例比较
+```{r}
+scRNA$seurat_annotations = Idents(scRNA)
+#把细胞类型设置为meta.data中的一列
+```
+从GSE页面上可以看到，前3个样本是IgG4-RD组，后3个样本是control组。有的数据GSE页面上看不到这样的分组信息，需要自己去下载和提取。
+
+一个简单的方法：
+```{r}
+library(tinyarray)
+edat = geo_download("GSE231920")
+pd = edat$pd
+```
+忽略warning，只有基因表达芯片数据的表达矩阵才不是空的。我们只需要临床信息，表达矩阵空的没事。
+
+从右边点pd可以看到pd的内容。(是点pd或者pd后面的空白，不是点pd前面的三角符号)
+
+这里写scRNA$group和scRNA@meta.data$group其实是一样的，都会给meta.data添加一列，名为group。这就用到前面的刚学的ifelse和%in%啦，都是R语言神技能！
+```{r}
+scRNA$group = ifelse(scRNA$orig.ident %in% c("sample1","sample2","sample3"), "treat","control")
+DimPlot(scRNA, reduction = "umap", group.by = "group")
+```
+## 计算每个亚群的细胞数量和占全部细胞的比例
+这里面虽然也有很多函数，但不难理解，也不用改动，可以结合代码和输入数据、输出结果来理解，也可以自己查帮助文档或者是搜索来学习。
+```{r}
+# 每种细胞的数量和比例
+cell_counts <- table(Idents(scRNA))
+cell.all <- cbind(cell_counts = cell_counts, 
+                  cell_Freq = round(prop.table(cell_counts)*100,2))
+#各组中每种细胞的数量和比例
+cell.num.group <- table(Idents(scRNA), scRNA$group) 
+cell.freq.group <- round(prop.table(cell.num.group, margin = 2) *100,2)
+cell.all = cbind(cell.all,cell.num.group,cell.freq.group)
+cell.all = cell.all[,c(1,3,4,2,5,6)]
+colnames(cell.all) = paste(rep(c("all","control","treat"),times = 2),
+      rep(c("count","freq"),each = 3),sep = "_")
+cell.all
+```
+
+# 差异分析
+## 找某一细胞内部的组间差异基因
+```{r}
+sub.obj = subset(scRNA,idents = "NK cells")
+dfmarkers <- FindMarkers(scRNA, ident.1 = "treat", group.by = "group",min.pct = 0.25, logfc.threshold = 0.25,verbose = F)
+head(dfmarkers)
+```
+## 找conserved marker基因
+初次运行也是会提示安装两个包，没有提示就是已经安装过了。
+```{r}
+if(!require("multtest"))BiocManager::install('multtest')
+if(!require("metap"))install.packages('metap')
+sub.markers <- FindConservedMarkers(scRNA, ident.1 = "NK cells", grouping.var = "group", min.pct = 0.25, logfc.threshold = 0.25,verbose = F)
+head(sub.markers)
+```
+
+FindConservedMarkers和前面的FindMarkers 不大一样。它结合了“分组”和“细胞类型”，是找出不同细胞类型之间在不同条件（treat和control）下都有差异的基因。结合上面的代码来看，就是找出在control组内部NK和其他细胞的差异基因，再找出treat组内部NK和其他细胞的差异基因，二者取交集，就是NK和其他细胞的差异保守的基因，即conservedmarkers。
+
+## 组间比较的气泡图
+```{r}
+markers.to.plot = c("CD3D", "CREM", "HSPH1", "SELL", "GIMAP5", "CACYBP", "GNLY", "NKG7", "CCL5",
+    "CD8A", "MS4A1", "CD79A", "MIR155HG", "NME1", "FCGR3A", "VMO1", "CCL2", "S100A9", "HLA-DQA1",
+    "GPR183", "PPBP", "GNG11", "HBA2", "HBB", "TSPAN13", "IL3RA", "PRSS57") #一组感兴趣的基因
+#如果idents有NA会报错https://github.com/satijalab/seurat/issues/8772
+#scRNA <- subset(scRNA, seurat_annotations %in% na.omit(scRNA$seurat_annotations))
+DotPlot(scRNA, features = markers.to.plot, cols = c("blue", "red"), 
+        dot.scale = 8, split.by = "group") +
+    RotatedAxis()
+```
+
+##  FeaturePlot
+一行是一个基因，一列是一个分组，可以很直观的对比。
+```{r}
+FeaturePlot(scRNA, features = c("CD3D", "GNLY", "IFI6"), split.by = "group", max.cutoff = 3, cols = c("grey",
+    "red"), reduction = "umap")
+```
+
+## VlnPlot
+还是小提琴图，只是把每种细胞类型分成两组来展示
+```{r}
+plots <- VlnPlot(scRNA, features = c("LYZ", "ISG15", "MS4A1"), split.by = "group", group.by = "seurat_annotations",
+    pt.size = 0, combine = FALSE)
+library(patchwork)
+wrap_plots(plots = plots, ncol = 1)
+```
+
+# 伪bulk 转录组差异分析
+bulk转录组就是常规转录组。只有和单细胞转录组相提并论时，它才会叫bulk转录组。就好比人平常就叫”人”，和残疾人相提并论时才会叫”正常人”
+
+## 单细胞样本整合为伪bulk转录组样本
+每个组要有多个样本才能做。
+
+AggregateExpression是把单细胞数据整合为常规转录组数据的方式。group.by = c("seurat_annotations","orig.ident", "group")就是同一细胞类型、同一样本、同一分组的细胞汇总在一起成为一个“样本”。
+```{r}
+bulk <- AggregateExpression(scRNA, return.seurat = T, slot = "counts", assays = "RNA", group.by = c("seurat_annotations","orig.ident", "group"))
+colnames(bulk)#整合成了多个“样本”
+```
+可以只取出一种细胞，然后找treat和control之间的差异基因,这和常规转录组的差异分析是一样的。
+```{r}
+sub <- subset(bulk, seurat_annotations == "CD8+ T-cells")
+colnames(sub)
+
+## [1] "CD8+ T-cells_sample1_treat"   "CD8+ T-cells_sample2_treat"  
+## [3] "CD8+ T-cells_sample3_treat"   "CD8+ T-cells_sample4_control"
+## [5] "CD8+ T-cells_sample5_control" "CD8+ T-cells_sample6_control"
+
+Idents(sub) <- "group"
+de_markers <- FindMarkers(sub, ident.1 = "treat", ident.2 = "control", slot = "counts", test.use = "DESeq2",
+    verbose = F)
+de_markers$gene <- rownames(de_markers)
+```
+
+## 火山图
+```{r}
+k1 = de_markers$avg_log2FC< -1 & de_markers$p_val <0.01
+k2 = de_markers$avg_log2FC> 1 & de_markers$p_val <0.01
+de_markers$change <- ifelse(k1,"down",ifelse(k2,"up","not"))
+#满足k1就是down，不满足的话再看是否满足k2，满足k2就是up，不满足就是not。
+```
+火山图的本质是一个ggplot2点图，ggplot2是一个非常值得系统学习的R包，推荐资料：https://r4ds.hadley.nz/data-visualize
+```{r}
+library(ggplot2)
+ggplot(de_markers, aes(avg_log2FC, -log10(p_val),color = change)) + 
+  geom_point(size = 2, alpha = 0.5) + 
+  geom_vline(xintercept = c(1,-1),linetype = 4)+
+  geom_hline(yintercept = -log10(0.01),linetype = 4)+
+  scale_color_manual(values = c("#2874C5", "grey", "#f87669"))+
+  theme_bw() +
+  ylab("-log10(unadjusted p-value)") 
+```
+代码主要参考：
+
+https://satijalab.org/seurat/articles/integration_introduction
+
+https://satijalab.org/seurat/articles/parsebio_sketch_integration
+
+今日任务：因为多样本数据需要的计算资源大，就先不要求换数据了，跑通本文就好。本文最后一张火山图是cd8+ T细胞的，你换成NK细胞画来火山图，交这张图作为作业。
+
+
+# 作业
+```{r}
+sub1 <- subset(bulk, seurat_annotations == "NK cells")
+colnames(sub1)
+Idents(sub1) <- "group"
+de_markers1 <- FindMarkers(sub1, ident.1 = "treat", ident.2 = "control", slot = "counts", test.use = "DESeq2",
+    verbose = F)
+de_markers1$gene <- rownames(de_markers1)
+```
+```{r}
+k3 = de_markers1$avg_log2FC< -1 & de_markers1$p_val <0.01
+k4 = de_markers1$avg_log2FC> 1 & de_markers1$p_val <0.01
+de_markers1$change <- ifelse(k3,"down",ifelse(k4,"up","not"))
+```
+```{r}
+library(ggplot2)
+ggplot(de_markers1, aes(avg_log2FC, -log10(p_val),color = change)) + 
+  geom_point(size = 2, alpha = 0.5) + 
+  geom_vline(xintercept = c(1,-1),linetype = 4)+
+  geom_hline(yintercept = -log10(0.01),linetype = 4)+
+  scale_color_manual(values = c("#2874C5", "grey", "#f87669"))+
+  theme_bw() +
+  ylab("-log10(unadjusted p-value)") 
+```
+
+
+
+
+
